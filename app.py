@@ -1,3 +1,3 @@
 import streamlit as st
-st.title('이채은')
-st.write('오성고학생')
+st.title('이서윤')
+st.write('화이팅')
