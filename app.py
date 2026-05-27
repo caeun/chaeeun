@@ -1,51 +1,96 @@
 import streamlit as st
-from datetime import datetime
+from google import genai
+from google.genai import types
 
-# 제목
-st.title("📅 스케줄 관리 앱")
+MODEL = "gemini-2.5-flash-lite"
 
-# 세션 저장소 생성
-if "todo_list" not in st.session_state:
-    st.session_state.todo_list = []
+SYSTEM_PROMPT = """
+너는 따뜻하고 현실적인 연애상담 챗봇이야.
+사용자의 감정을 먼저 공감하고, 단정하지 말고, 구체적인 선택지를 제안해.
+위험하거나 학대/스토킹/자해 가능성이 보이면 안전을 우선으로 안내해.
+"""
 
-# 입력 영역
-task = st.text_input("할 일 입력")
-task_date = st.date_input("날짜 선택")
+st.set_page_config(page_title="연애상담 챗봇", page_icon="💬")
+st.title("💬 연애상담 챗봇")
 
-# 추가 버튼
-if st.button("일정 추가"):
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    st.error("GEMINI_API_KEY가 Secrets에 설정되어 있지 않습니다.")
+    st.stop()
 
-    # 빈값 체크
-    if task.strip() == "":
-        st.warning("할 일을 입력하세요.")
-    else:
-        st.session_state.todo_list.append(
-            {
-                "task": task,
-                "date": str(task_date)
-            }
+client = genai.Client(api_key=api_key)
+
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": "안녕. 무슨 일이 있었는지 편하게 말해줘 🙂"}
+    ]
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+user_input = st.chat_input("상황을 입력해 주세요...")
+
+def to_gemini_contents(messages):
+    contents = []
+    for msg in messages:
+        if msg["role"] == "user":
+            role = "user"
+        elif msg["role"] == "assistant":
+            role = "model"
+        else:
+            continue
+
+        contents.append(
+            types.Content(
+                role=role,
+                parts=[types.Part(text=msg["content"])]
+            )
         )
-        st.success("추가 완료")
+    return contents
 
-# 구분선
-st.write("---")
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
 
-# 일정 목록
-st.subheader("일정 목록")
+    with st.chat_message("user"):
+        st.markdown(user_input)
 
-# 일정 없을 때
-if len(st.session_state.todo_list) == 0:
-    st.info("등록된 일정이 없습니다.")
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        full_response = ""
 
-# 일정 출력
-for idx, item in enumerate(st.session_state.todo_list):
+        try:
+            contents = to_gemini_contents(st.session_state.messages)
 
-    col1, col2 = st.columns([4, 1])
+            stream = client.models.generate_content_stream(
+                model=MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=0.8,
+                ),
+            )
 
-    with col1:
-        st.write(f"{item['date']} - {item['task']}")
+            for chunk in stream:
+                if chunk.text:
+                    full_response += chunk.text
+                    placeholder.markdown(full_response + "▌")
 
-    with col2:
-        if st.button("삭제", key=f"delete_{idx}"):
-            st.session_state.todo_list.pop(idx)
-            st.experimental_rerun()
+            placeholder.markdown(full_response)
+
+        except Exception as e:
+            full_response = f"오류가 발생했습니다: `{e}`"
+            placeholder.error(full_response)
+
+    st.session_state.messages.append(
+        {"role": "assistant", "content": full_response}
+    )
+
+with st.sidebar:
+    st.header("설정")
+    if st.button("대화 초기화"):
+        st.session_state.messages = [
+            {"role": "assistant", "content": "대화를 초기화했어요. 다시 이야기해줘 🙂"}
+        ]
+        st.rerun()
