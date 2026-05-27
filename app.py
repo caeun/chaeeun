@@ -1,96 +1,113 @@
 import streamlit as st
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 
-MODEL = "gemini-2.5-flash-lite"
+# -----------------------------
+# 페이지 설정
+# -----------------------------
+st.set_page_config(
+    page_title="연애상담 챗봇",
+    page_icon="💌"
+)
 
-SYSTEM_PROMPT = """
-너는 따뜻하고 현실적인 연애상담 챗봇이야.
-사용자의 감정을 먼저 공감하고, 단정하지 말고, 구체적인 선택지를 제안해.
-위험하거나 학대/스토킹/자해 가능성이 보이면 안전을 우선으로 안내해.
-"""
+st.title("💌 연애상담 챗봇")
+st.caption("Gemini 2.5 Flash Lite 기반")
 
-st.set_page_config(page_title="연애상담 챗봇", page_icon="💬")
-st.title("💬 연애상담 챗봇")
-
+# -----------------------------
+# API 키 불러오기
+# -----------------------------
 try:
-    api_key = st.secrets["GEMINI_API_KEY"]
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    genai.configure(api_key=api_key)
+
 except Exception:
-    st.error("GEMINI_API_KEY가 Secrets에 설정되어 있지 않습니다.")
+    st.error("API 키를 불러올 수 없습니다. secrets 설정을 확인하세요.")
     st.stop()
 
-client = genai.Client(api_key=api_key)
+# -----------------------------
+# 모델 생성
+# -----------------------------
+try:
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash-lite",
+        system_instruction="""
+        너는 따뜻하고 공감 능력이 뛰어난 연애상담 전문가야.
+        사용자의 감정을 존중하고 현실적인 조언을 제공해.
+        너무 공격적이거나 단정적인 표현은 피하고,
+        친근한 말투로 답변해.
+        """
+    )
 
+except Exception as e:
+    st.error(f"모델 생성 오류: {e}")
+    st.stop()
+
+# -----------------------------
+# 채팅 기록 저장
+# -----------------------------
 if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "안녕. 무슨 일이 있었는지 편하게 말해줘 🙂"}
-    ]
+    st.session_state.messages = []
 
+# 이전 대화 출력
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-user_input = st.chat_input("상황을 입력해 주세요...")
-
-def to_gemini_contents(messages):
-    contents = []
-    for msg in messages:
-        if msg["role"] == "user":
-            role = "user"
-        elif msg["role"] == "assistant":
-            role = "model"
-        else:
-            continue
-
-        contents.append(
-            types.Content(
-                role=role,
-                parts=[types.Part(text=msg["content"])]
-            )
-        )
-    return contents
+# -----------------------------
+# 사용자 입력
+# -----------------------------
+user_input = st.chat_input("연애 고민을 입력하세요...")
 
 if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
 
+    # 사용자 메시지 저장
+    st.session_state.messages.append({
+        "role": "user",
+        "content": user_input
+    })
+
+    # 사용자 메시지 출력
     with st.chat_message("user"):
         st.markdown(user_input)
 
+    # AI 응답 생성
     with st.chat_message("assistant"):
-        placeholder = st.empty()
-        full_response = ""
 
         try:
-            contents = to_gemini_contents(st.session_state.messages)
+            with st.spinner("생각 중..."):
 
-            stream = client.models.generate_content_stream(
-                model=MODEL,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.8,
-                ),
-            )
+                # 대화 기록 구성
+                history = []
 
-            for chunk in stream:
-                if chunk.text:
-                    full_response += chunk.text
-                    placeholder.markdown(full_response + "▌")
+                for msg in st.session_state.messages[:-1]:
 
-            placeholder.markdown(full_response)
+                    role = "user" if msg["role"] == "user" else "model"
+
+                    history.append({
+                        "role": role,
+                        "parts": [msg["content"]]
+                    })
+
+                # 채팅 시작
+                chat = model.start_chat(history=history)
+
+                response = chat.send_message(user_input)
+
+                bot_reply = response.text
+
+                st.markdown(bot_reply)
+
+                # 응답 저장
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": bot_reply
+                })
 
         except Exception as e:
-            full_response = f"오류가 발생했습니다: `{e}`"
-            placeholder.error(full_response)
+            error_msg = f"오류가 발생했습니다: {e}"
 
-    st.session_state.messages.append(
-        {"role": "assistant", "content": full_response}
-    )
+            st.error(error_msg)
 
-with st.sidebar:
-    st.header("설정")
-    if st.button("대화 초기화"):
-        st.session_state.messages = [
-            {"role": "assistant", "content": "대화를 초기화했어요. 다시 이야기해줘 🙂"}
-        ]
-        st.rerun()
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": error_msg
+            })
